@@ -1257,6 +1257,7 @@ struct ProviderSourceEditorView: View {
     @State private var oauthAuthorization: OAuthDeviceAuthorization?
     @State private var oauthBrowserURL: URL?
     @State private var oauthMessage: String?
+    @State private var oauthImportMessage: String?
     @State private var isAuthorizing = false
     @State private var sourceMessage: String?
     @State private var isSaving = false
@@ -1450,6 +1451,27 @@ struct ProviderSourceEditorView: View {
                 if let oauthService = sourceKind.oauthService {
                     ProviderHintRow(text: oauthService.onboardingGuidanceText)
 
+                    if oauthService == .googleCalendar {
+                        LocalCalendarEditorRow(label: "OAuth JSON") {
+                            HStack(spacing: 10) {
+                                Button {
+                                    importGoogleOAuthClientJSON()
+                                } label: {
+                                    Label("Import Desktop JSON", systemImage: "doc.badge.gearshape")
+                                }
+                                .buttonStyle(.bordered)
+                                .help("Import the downloaded Google Desktop OAuth JSON and fill client_id/client_secret locally.")
+
+                                if let oauthImportMessage {
+                                    Text(oauthImportMessage)
+                                        .font(.caption)
+                                        .foregroundStyle(Color.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                        }
+                    }
+
                     LocalCalendarEditorRow(label: "Client ID") {
                         TextField(oauthService.clientIDPlaceholder, text: $oauthClientID)
                             .textFieldStyle(.plain)
@@ -1549,6 +1571,7 @@ struct ProviderSourceEditorView: View {
             oauthAuthorization = nil
             oauthBrowserURL = nil
             oauthMessage = nil
+            oauthImportMessage = nil
             sourceMessage = nil
             isAuthorizing = false
             isSaving = false
@@ -1585,6 +1608,29 @@ struct ProviderSourceEditorView: View {
         let oldDefaultClientID = oldService?.defaultClientID ?? ""
         if trimmedClientID.isEmpty || (!oldDefaultClientID.isEmpty && trimmedClientID == oldDefaultClientID) {
             oauthClientID = newService?.defaultClientID ?? ""
+        }
+    }
+
+    private func importGoogleOAuthClientJSON() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose the downloaded Google Desktop OAuth JSON."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let configuration = try GoogleOAuthClientConfiguration.load(from: url)
+            oauthClientID = configuration.clientID
+            oauthClientSecret = configuration.clientSecret ?? ""
+            oauthImportMessage = configuration.clientSecret == nil
+                ? "Imported client_id. No client_secret was present in this Desktop JSON."
+                : "Imported Desktop OAuth client_id and client_secret."
+            oauthMessage = nil
+        } catch {
+            oauthImportMessage = error.localizedDescription
         }
     }
 
@@ -1834,6 +1880,7 @@ struct ProviderReconnectView: View {
     @State private var oauthAuthorization: OAuthDeviceAuthorization?
     @State private var oauthBrowserURL: URL?
     @State private var oauthMessage: String?
+    @State private var oauthImportMessage: String?
     @State private var isAuthorizing = false
 
     init(
@@ -1924,6 +1971,27 @@ struct ProviderReconnectView: View {
 
                 if let onboardingGuidanceText = service?.onboardingGuidanceText {
                     ProviderHintRow(text: onboardingGuidanceText)
+                }
+
+                if service == .googleCalendar {
+                    LocalCalendarEditorRow(label: "OAuth JSON") {
+                        HStack(spacing: 10) {
+                            Button {
+                                importGoogleOAuthClientJSON()
+                            } label: {
+                                Label("Import Desktop JSON", systemImage: "doc.badge.gearshape")
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Import the downloaded Google Desktop OAuth JSON and fill client_id/client_secret locally.")
+
+                            if let oauthImportMessage {
+                                Text(oauthImportMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(Color.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
                 }
 
                 LocalCalendarEditorRow(label: "Client ID") {
@@ -2069,6 +2137,29 @@ struct ProviderReconnectView: View {
         } catch {
             oauthMessage = error.localizedDescription
             isAuthorizing = false
+        }
+    }
+
+    private func importGoogleOAuthClientJSON() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose the downloaded Google Desktop OAuth JSON."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let configuration = try GoogleOAuthClientConfiguration.load(from: url)
+            oauthClientID = configuration.clientID
+            oauthClientSecret = configuration.clientSecret ?? ""
+            oauthImportMessage = configuration.clientSecret == nil
+                ? "Imported client_id. No client_secret was present in this Desktop JSON."
+                : "Imported Desktop OAuth client_id and client_secret."
+            oauthMessage = nil
+        } catch {
+            oauthImportMessage = error.localizedDescription
         }
     }
 

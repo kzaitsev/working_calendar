@@ -238,6 +238,79 @@ struct OAuthCredential: Codable, Hashable {
     }
 }
 
+struct GoogleOAuthClientConfiguration: Hashable {
+    let clientID: String
+    let clientSecret: String?
+    let redirectURIs: [String]
+
+    static func load(from url: URL) throws -> GoogleOAuthClientConfiguration {
+        let data = try Data(contentsOf: url)
+        return try decode(data)
+    }
+
+    static func decode(_ data: Data) throws -> GoogleOAuthClientConfiguration {
+        let decoded = try JSONDecoder().decode(GoogleOAuthClientConfigurationFile.self, from: data)
+        guard let installed = decoded.installed else {
+            throw GoogleOAuthClientConfigurationError.missingInstalledClient
+        }
+
+        let clientID = installed.clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientID.isEmpty else {
+            throw GoogleOAuthClientConfigurationError.missingClientID
+        }
+        if let validationMessage = OAuthServiceKind.googleCalendar.clientIDValidationMessage(for: clientID) {
+            throw GoogleOAuthClientConfigurationError.invalidClientID(validationMessage)
+        }
+
+        let clientSecret = installed.clientSecret?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfBlank
+
+        return GoogleOAuthClientConfiguration(
+            clientID: clientID,
+            clientSecret: clientSecret,
+            redirectURIs: installed.redirectURIs ?? []
+        )
+    }
+}
+
+enum GoogleOAuthClientConfigurationError: LocalizedError {
+    case missingInstalledClient
+    case missingClientID
+    case invalidClientID(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingInstalledClient:
+            return "Choose the downloaded JSON for a Google Desktop OAuth client. The file should contain an installed client section, not a web client section."
+        case .missingClientID:
+            return "The Google OAuth JSON does not contain an installed.client_id."
+        case .invalidClientID(let message):
+            return message
+        }
+    }
+}
+
+private struct GoogleOAuthClientConfigurationFile: Decodable {
+    let installed: GoogleOAuthClientConfigurationPayload?
+
+    private enum CodingKeys: String, CodingKey {
+        case installed
+    }
+}
+
+private struct GoogleOAuthClientConfigurationPayload: Decodable {
+    let clientID: String
+    let clientSecret: String?
+    let redirectURIs: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case clientID = "client_id"
+        case clientSecret = "client_secret"
+        case redirectURIs = "redirect_uris"
+    }
+}
+
 enum OAuthDeviceFlowError: LocalizedError {
     case missingClientID
     case invalidClientID(OAuthServiceKind, String)

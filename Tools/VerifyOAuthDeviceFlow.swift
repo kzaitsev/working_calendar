@@ -4,6 +4,7 @@ import Foundation
 struct VerifyOAuthDeviceFlow {
     static func main() async throws {
         try verifyOAuthOnboardingMetadata()
+        try verifyGoogleOAuthClientConfigurationImport()
         try await verifyOAuthClientIDValidation()
         try await verifyDeviceAuthorizationRequest()
         try await verifyGoogleDoesNotUseDeviceAuthorization()
@@ -62,6 +63,41 @@ struct VerifyOAuthDeviceFlow {
                    "Microsoft onboarding should explain device-code flow requirements")
         try expect(OAuthServiceKind.microsoft365.onboardingGuidanceText.contains("Keychain"),
                    "Microsoft onboarding should explain refresh-token storage")
+    }
+
+    private static func verifyGoogleOAuthClientConfigurationImport() throws {
+        let installedJSON = """
+        {
+          "installed": {
+            "client_id": " 1234567890-abc.apps.googleusercontent.com ",
+            "client_secret": " desktop-client-secret ",
+            "redirect_uris": ["http://localhost"]
+          }
+        }
+        """
+        let configuration = try GoogleOAuthClientConfiguration.decode(Data(installedJSON.utf8))
+        try expect(configuration.clientID == "1234567890-abc.apps.googleusercontent.com",
+                   "Google Desktop OAuth JSON import should trim installed.client_id")
+        try expect(configuration.clientSecret == "desktop-client-secret",
+                   "Google Desktop OAuth JSON import should trim installed.client_secret")
+        try expect(configuration.redirectURIs == ["http://localhost"],
+                   "Google Desktop OAuth JSON import should preserve redirect URI metadata")
+
+        let webJSON = """
+        {
+          "web": {
+            "client_id": "1234567890-web.apps.googleusercontent.com",
+            "client_secret": "web-client-secret"
+          }
+        }
+        """
+        do {
+            _ = try GoogleOAuthClientConfiguration.decode(Data(webJSON.utf8))
+            throw OAuthDeviceFlowInvariantError("Google web OAuth JSON should not be accepted for desktop loopback sign-in")
+        } catch GoogleOAuthClientConfigurationError.missingInstalledClient {
+            try expect(GoogleOAuthClientConfigurationError.missingInstalledClient.localizedDescription.contains("Desktop OAuth"),
+                       "Google OAuth JSON import should explain that Desktop JSON is required")
+        }
     }
 
     private static func verifyOAuthClientIDValidation() async throws {

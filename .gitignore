@@ -2,3 +2,5 @@ build/
 .DS_Store
 *.xcuserdata
 DerivedData/
+client_secret*.json
+*client_secret*.json
