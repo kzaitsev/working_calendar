@@ -25,7 +25,7 @@ Depending on the sources you connect, Working Calendar may access and store the 
 - Calendar event data, such as titles, descriptions, start and end times, time zones, recurrence rules, status, availability, privacy labels, categories, reminders, locations, rooms/resources, attendees, organizers, RSVP/response status, meeting links, attachments metadata, and provider sync metadata.
 - Meeting participation details, such as whether you accepted, declined, tentatively accepted, or have not responded to an invitation, and attendee response status when the provider supplies it.
 - App configuration, such as enabled calendars, alert rules, auto-response rules, look-ahead windows, notification preferences, and local calendar settings.
-- Credentials needed to sync with providers, such as CalDAV passwords or app-specific passwords, OAuth access tokens, OAuth refresh tokens, OAuth client IDs, provider URLs, sync tokens, ETags, change keys, and similar provider metadata.
+- Credentials needed to sync with providers, such as CalDAV passwords or app-specific passwords, OAuth access tokens, OAuth refresh tokens, OAuth client IDs, optional OAuth desktop client secrets, provider URLs, sync tokens, ETags, change keys, and similar provider metadata.
 - Imported calendar files and subscribed calendar URLs that you add to the app.
 
 ## How the App Uses Data

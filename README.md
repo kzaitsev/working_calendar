@@ -38,6 +38,14 @@ The first launch will ask for Notification permission. Calendar access is config
 - [Privacy Policy](PRIVACY.md)
 - [Terms of Service](TERMS.md)
 
+The public GitHub Pages site lives in `docs/` and can be served from the `main` branch with GitHub Pages source set to `/docs`.
+
+Expected public URLs after Pages is enabled:
+
+- `https://kzaitsev.github.io/working_calendar/`
+- `https://kzaitsev.github.io/working_calendar/privacy.html`
+- `https://kzaitsev.github.io/working_calendar/terms.html`
+
 ## Verify
 
 ```sh

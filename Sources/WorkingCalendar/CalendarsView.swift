@@ -1252,6 +1252,7 @@ struct ProviderSourceEditorView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var oauthClientID = ""
+    @State private var oauthClientSecret = ""
     @State private var oauthTenant = "common"
     @State private var oauthAuthorization: OAuthDeviceAuthorization?
     @State private var oauthBrowserURL: URL?
@@ -1458,6 +1459,19 @@ struct ProviderSourceEditorView: View {
                             .help(oauthService.onboardingGuidanceText)
                     }
 
+                    if oauthService.usesClientSecret {
+                        LocalCalendarEditorRow(label: "Client Secret") {
+                            SecureField(oauthService.clientSecretPlaceholder, text: $oauthClientSecret)
+                                .textFieldStyle(.plain)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .help(oauthService.clientSecretGuidanceText)
+                        }
+
+                        ProviderHintRow(text: oauthService.clientSecretGuidanceText)
+                    }
+
                     if let oauthClientIDValidationMessage {
                         ProviderHintRow(text: oauthClientIDValidationMessage)
                     }
@@ -1539,6 +1553,9 @@ struct ProviderSourceEditorView: View {
             isAuthorizing = false
             isSaving = false
             applyDefaultOAuthClientID(oldService: oldKind.oauthService, newService: newKind.oauthService)
+            if newKind.oauthService?.usesClientSecret != true {
+                oauthClientSecret = ""
+            }
             if newKind == .calDAV {
                 applyCalDAVPreset(oldPreset: .generic, newPreset: calDAVPreset)
             }
@@ -1596,6 +1613,9 @@ struct ProviderSourceEditorView: View {
         let tenant = service == .microsoft365
             ? oauthTenant.trimmingCharacters(in: .whitespacesAndNewlines)
             : nil
+        let clientSecret = service.usesClientSecret
+            ? normalizedOptional(oauthClientSecret)
+            : nil
 
         isAuthorizing = true
         oauthAuthorization = nil
@@ -1610,7 +1630,7 @@ struct ProviderSourceEditorView: View {
                 oauthBrowserURL = authorization.authorizationURL
                 NSWorkspace.shared.open(authorization.authorizationURL)
 
-                let credential = try await client.token(authorization: authorization)
+                let credential = try await client.token(authorization: authorization, clientSecret: clientSecret)
                 oauthMessage = "Connected. Syncing calendars..."
 
                 if let error = await saveGoogle(title, credential) {
@@ -1648,6 +1668,11 @@ struct ProviderSourceEditorView: View {
             oauthMessage = error.localizedDescription
             isAuthorizing = false
         }
+    }
+
+    private func normalizedOptional(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -1804,6 +1829,7 @@ struct ProviderReconnectView: View {
     let cancel: () -> Void
 
     @State private var oauthClientID: String
+    @State private var oauthClientSecret: String
     @State private var oauthTenant: String
     @State private var oauthAuthorization: OAuthDeviceAuthorization?
     @State private var oauthBrowserURL: URL?
@@ -1831,6 +1857,7 @@ struct ProviderReconnectView: View {
         }
         let storedClientID = existingCredential?.clientID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         _oauthClientID = State(initialValue: storedClientID.isEmpty ? fallbackService?.defaultClientID ?? "" : storedClientID)
+        _oauthClientSecret = State(initialValue: existingCredential?.clientSecret ?? "")
         _oauthTenant = State(initialValue: existingCredential?.tenant?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? existingCredential?.tenant ?? "common"
             : "common")
@@ -1912,6 +1939,21 @@ struct ProviderReconnectView: View {
                     ProviderHintRow(text: oauthClientIDValidationMessage)
                 }
 
+                if service?.usesClientSecret == true {
+                    LocalCalendarEditorRow(label: "Client Secret") {
+                        SecureField(service?.clientSecretPlaceholder ?? "Optional client_secret", text: $oauthClientSecret)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .help(service?.clientSecretGuidanceText ?? "Enter a client_secret only if the OAuth provider requires it.")
+                    }
+
+                    if let clientSecretGuidanceText = service?.clientSecretGuidanceText, !clientSecretGuidanceText.isEmpty {
+                        ProviderHintRow(text: clientSecretGuidanceText)
+                    }
+                }
+
                 if service?.usesTenant == true {
                     LocalCalendarEditorRow(label: "Tenant") {
                         TextField(service?.tenantPlaceholder ?? "common", text: $oauthTenant)
@@ -1985,6 +2027,9 @@ struct ProviderReconnectView: View {
         oauthAuthorization = nil
         oauthBrowserURL = nil
         oauthMessage = "Requesting sign-in code..."
+        let clientSecret = service.usesClientSecret
+            ? normalizedOptional(oauthClientSecret)
+            : nil
 
         do {
             let client = OAuthDeviceFlowClient()
@@ -1997,7 +2042,7 @@ struct ProviderReconnectView: View {
                 oauthBrowserURL = authorization.authorizationURL
                 NSWorkspace.shared.open(authorization.authorizationURL)
 
-                let credential = try await client.token(authorization: authorization)
+                let credential = try await client.token(authorization: authorization, clientSecret: clientSecret)
                 oauthMessage = "Connected. Syncing calendars..."
                 if let error = await save(credential) {
                     oauthMessage = error
@@ -2025,6 +2070,11 @@ struct ProviderReconnectView: View {
             oauthMessage = error.localizedDescription
             isAuthorizing = false
         }
+    }
+
+    private func normalizedOptional(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

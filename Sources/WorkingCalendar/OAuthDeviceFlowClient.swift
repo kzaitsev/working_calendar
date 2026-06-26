@@ -74,6 +74,33 @@ enum OAuthServiceKind: String, Codable, Hashable {
         }
     }
 
+    var usesClientSecret: Bool {
+        switch self {
+        case .googleCalendar:
+            return true
+        case .microsoft365:
+            return false
+        }
+    }
+
+    var clientSecretPlaceholder: String {
+        switch self {
+        case .googleCalendar:
+            return "Optional client_secret from Desktop OAuth JSON"
+        case .microsoft365:
+            return ""
+        }
+    }
+
+    var clientSecretGuidanceText: String {
+        switch self {
+        case .googleCalendar:
+            return "Optional: Google Desktop OAuth may include a client_secret in the downloaded JSON. It is not a user password or a confidential desktop secret; enter it only if Google rejects token exchange with client_secret is missing."
+        case .microsoft365:
+            return ""
+        }
+    }
+
     var tenantPlaceholder: String {
         switch self {
         case .googleCalendar:
@@ -197,6 +224,7 @@ struct OAuthCredential: Codable, Hashable {
     var tokenType: String
     var scope: String
     var clientID: String
+    var clientSecret: String? = nil
     var tenant: String?
     var service: OAuthServiceKind
 
@@ -222,6 +250,7 @@ enum OAuthDeviceFlowError: LocalizedError {
     case loopbackAuthorizationUnsupported(OAuthServiceKind)
     case loopbackListenerFailed(String)
     case missingAuthorizationCode
+    case missingClientSecret
     case stateMismatch
     case randomGenerationFailed
     case refreshTokenRejected(String)
@@ -255,6 +284,8 @@ enum OAuthDeviceFlowError: LocalizedError {
             return "Could not start local OAuth redirect listener: \(message)"
         case .missingAuthorizationCode:
             return "The OAuth provider did not return an authorization code."
+        case .missingClientSecret:
+            return "Google requires a client_secret for this OAuth client. If this is a Desktop OAuth client, download its JSON from Google Cloud and enter installed.client_secret. If there is no installed.client_secret, create a Desktop app OAuth client instead of a Web Application client."
         case .stateMismatch:
             return "The OAuth response did not match this sign-in attempt. Start connection again."
         case .randomGenerationFailed:
@@ -391,7 +422,7 @@ final class OAuthDeviceFlowClient {
         )
     }
 
-    func token(authorization: OAuthLoopbackAuthorization) async throws -> OAuthCredential {
+    func token(authorization: OAuthLoopbackAuthorization, clientSecret: String? = nil) async throws -> OAuthCredential {
         defer { authorization.cancel() }
         let callback = try await authorization.waitForCallback()
         if let error = callback.error.nilIfBlank {
@@ -404,17 +435,24 @@ final class OAuthDeviceFlowClient {
             throw OAuthDeviceFlowError.missingAuthorizationCode
         }
 
+        var fields = [
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": authorization.clientID,
+            "redirect_uri": authorization.redirectURI.absoluteString,
+            "code_verifier": authorization.codeVerifier
+        ]
+        let normalizedClientSecret = clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        if let normalizedClientSecret {
+            fields["client_secret"] = normalizedClientSecret
+        }
+
         let credential = try await token(
             service: authorization.service,
             clientID: authorization.clientID,
             tenant: nil,
-            fields: [
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": authorization.clientID,
-                "redirect_uri": authorization.redirectURI.absoluteString,
-                "code_verifier": authorization.codeVerifier
-            ]
+            clientSecret: normalizedClientSecret,
+            fields: fields
         )
         guard credential.refreshToken.nilIfBlank != nil else {
             throw OAuthDeviceFlowError.missingRefreshToken
@@ -433,6 +471,7 @@ final class OAuthDeviceFlowClient {
                     service: authorization.service,
                     clientID: authorization.clientID,
                     tenant: authorization.tenant,
+                    clientSecret: nil,
                     fields: [
                         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                         "device_code": authorization.deviceCode,
@@ -474,6 +513,11 @@ final class OAuthDeviceFlowClient {
             "client_id": credential.clientID
         ]
 
+        let normalizedClientSecret = credential.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        if let normalizedClientSecret {
+            fields["client_secret"] = normalizedClientSecret
+        }
+
         if credential.service == .microsoft365 {
             fields["scope"] = credential.scope.nilIfBlank ?? credential.service.scopes
         }
@@ -482,6 +526,7 @@ final class OAuthDeviceFlowClient {
             service: credential.service,
             clientID: credential.clientID,
             tenant: credential.tenant,
+            clientSecret: normalizedClientSecret,
             fields: fields
         )
         if refreshed.refreshToken.nilIfBlank == nil {
@@ -494,6 +539,7 @@ final class OAuthDeviceFlowClient {
         service: OAuthServiceKind,
         clientID: String,
         tenant: String?,
+        clientSecret: String?,
         fields: [String: String]
     ) async throws -> OAuthCredential {
         let endpoint = tokenEndpoint(service: service, tenant: tenant?.nilIfBlank ?? service.defaultTenant)
@@ -511,6 +557,7 @@ final class OAuthDeviceFlowClient {
             tokenType: response.tokenType.nilIfBlank ?? "Bearer",
             scope: response.scope.nilIfBlank ?? service.scopes,
             clientID: clientID,
+            clientSecret: clientSecret?.nilIfBlank,
             tenant: service.usesTenant ? tenant?.nilIfBlank : nil,
             service: service
         )
@@ -536,6 +583,10 @@ final class OAuthDeviceFlowClient {
         if let errorResponse = try? JSONDecoder().decode(OAuthErrorResponse.self, from: data),
            let error = errorResponse.error.nilIfBlank {
             let message = errorResponse.errorDescription.nilIfBlank ?? error
+            if message.localizedCaseInsensitiveContains("client_secret"),
+               message.localizedCaseInsensitiveContains("missing") {
+                throw OAuthDeviceFlowError.missingClientSecret
+            }
             if isRefreshGrant,
                ["invalid_grant", "invalid_client", "unauthorized_client"].contains(error) {
                 throw OAuthDeviceFlowError.refreshTokenRejected(message)

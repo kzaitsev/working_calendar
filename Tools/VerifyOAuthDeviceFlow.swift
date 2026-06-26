@@ -9,6 +9,8 @@ struct VerifyOAuthDeviceFlow {
         try await verifyGoogleDoesNotUseDeviceAuthorization()
         try await verifyGoogleLoopbackAuthorizationURL()
         try await verifyGoogleLoopbackTokenExchange()
+        try await verifyGoogleLoopbackTokenExchangeWithClientSecret()
+        try await verifyGoogleMissingClientSecretError()
         try await verifyPollingSlowDownAndTokenSuccess()
         try await verifyInitialTokenRequiresRefreshToken()
         try await verifyGrantedScopesAreRequired()
@@ -37,6 +39,12 @@ struct VerifyOAuthDeviceFlow {
                    "Google onboarding should explain loopback desktop sign-in")
         try expect(OAuthServiceKind.googleCalendar.onboardingGuidanceText.localizedCaseInsensitiveContains("browser"),
                    "Google onboarding should explain browser sign-in")
+        try expect(OAuthServiceKind.googleCalendar.usesClientSecret,
+                   "Google onboarding should expose the optional desktop client_secret field")
+        try expect(OAuthServiceKind.googleCalendar.clientSecretGuidanceText.localizedCaseInsensitiveContains("optional"),
+                   "Google client_secret guidance should make the field optional")
+        try expect(OAuthServiceKind.googleCalendar.clientSecretGuidanceText.localizedCaseInsensitiveContains("not a user password"),
+                   "Google client_secret guidance should distinguish it from user credentials")
         try expect(!OAuthServiceKind.googleCalendar.usesTenant,
                    "Google onboarding should not ask for a tenant")
 
@@ -197,6 +205,7 @@ struct VerifyOAuthDeviceFlow {
         try expect(authorization.authorizationURL.host == "accounts.google.com", "Google authorization URL should target Google accounts")
         try expect(components.path == "/o/oauth2/v2/auth", "Google authorization URL should use the OAuth v2 auth endpoint")
         try expect(fields["client_id"] == authorization.clientID, "Google authorization URL should carry the client ID")
+        try expect(fields["client_secret"] == nil, "Google authorization URL should never expose a client_secret")
         try expect(fields["redirect_uri"] == authorization.redirectURI.absoluteString,
                    "Google authorization URL should carry the loopback redirect URI")
         try expect(fields["response_type"] == "code", "Google authorization URL should request an authorization code")
@@ -249,6 +258,7 @@ struct VerifyOAuthDeviceFlow {
         try expect(fields["grant_type"] == "authorization_code", "Google loopback token exchange should use authorization_code grant")
         try expect(fields["code"] == "authorization-code-1", "Google loopback token exchange should submit the callback code")
         try expect(fields["client_id"] == authorization.clientID, "Google loopback token exchange should submit the client ID")
+        try expect(fields["client_secret"] == nil, "Google loopback token exchange should omit blank client secrets")
         try expect(fields["redirect_uri"] == authorization.redirectURI.absoluteString,
                    "Google loopback token exchange should submit the exact redirect URI")
         try expect(fields["code_verifier"] == authorization.codeVerifier,
@@ -257,6 +267,86 @@ struct VerifyOAuthDeviceFlow {
         try expect(credential.refreshToken == "loopback-google-refresh", "Google loopback token exchange should return the refresh token")
         try expect(credential.expiresAt == now.addingTimeInterval(3600), "Google loopback token exchange should compute expiration from now")
         try expect(credential.service == .googleCalendar, "Google loopback token exchange should preserve the OAuth service")
+    }
+
+    private static func verifyGoogleLoopbackTokenExchangeWithClientSecret() async throws {
+        let now = try date("2026-07-01T09:00:00Z")
+        let transport = OAuthFixtureTransport(responses: [
+            .json("""
+            {
+              "access_token": "loopback-google-access-with-secret",
+              "refresh_token": "loopback-google-refresh-with-secret",
+              "expires_in": 3600,
+              "token_type": "Bearer",
+              "scope": "https://www.googleapis.com/auth/calendar"
+            }
+            """)
+        ])
+        let client = OAuthDeviceFlowClient(transport: transport, now: { now })
+        let authorization = try await client.requestLoopbackAuthorization(
+            service: .googleCalendar,
+            clientID: "1234567890-abc.apps.googleusercontent.com"
+        )
+
+        let tokenTask = Task {
+            try await client.token(authorization: authorization, clientSecret: " google-desktop-secret ")
+        }
+
+        var callbackComponents = URLComponents(url: authorization.redirectURI, resolvingAgainstBaseURL: false)!
+        callbackComponents.queryItems = [
+            URLQueryItem(name: "code", value: "authorization-code-with-secret"),
+            URLQueryItem(name: "state", value: authorization.state)
+        ]
+        _ = try await loopbackData(from: callbackComponents.url!)
+
+        let credential = try await tokenTask.value
+        let request = try requireOnlyRequest(transport.requests, context: "Google loopback token exchange with client secret")
+        let fields = try formFields(request)
+        try expect(fields["grant_type"] == "authorization_code",
+                   "Google secret-backed loopback token exchange should use authorization_code grant")
+        try expect(fields["client_secret"] == "google-desktop-secret",
+                   "Google secret-backed loopback token exchange should submit the trimmed desktop client_secret")
+        try expect(credential.clientSecret == "google-desktop-secret",
+                   "Google secret-backed loopback credentials should preserve the client_secret for refresh")
+        try expect(credential.refreshToken == "loopback-google-refresh-with-secret",
+                   "Google secret-backed loopback token exchange should keep the refresh token")
+    }
+
+    private static func verifyGoogleMissingClientSecretError() async throws {
+        let transport = OAuthFixtureTransport(responses: [
+            .json("""
+            {
+              "error": "invalid_request",
+              "error_description": "client_secret is missing."
+            }
+            """, statusCode: 400)
+        ])
+        let client = OAuthDeviceFlowClient(transport: transport)
+        let authorization = try await client.requestLoopbackAuthorization(
+            service: .googleCalendar,
+            clientID: "1234567890-abc.apps.googleusercontent.com"
+        )
+
+        let tokenTask = Task {
+            try await client.token(authorization: authorization)
+        }
+
+        var callbackComponents = URLComponents(url: authorization.redirectURI, resolvingAgainstBaseURL: false)!
+        callbackComponents.queryItems = [
+            URLQueryItem(name: "code", value: "authorization-code-without-secret"),
+            URLQueryItem(name: "state", value: authorization.state)
+        ]
+        _ = try await loopbackData(from: callbackComponents.url!)
+
+        do {
+            _ = try await tokenTask.value
+            throw OAuthDeviceFlowInvariantError("Google client_secret rejections should produce an actionable app error")
+        } catch OAuthDeviceFlowError.missingClientSecret {
+            try expect(OAuthDeviceFlowError.missingClientSecret.localizedDescription.contains("installed.client_secret"),
+                       "Missing client_secret errors should point to the Desktop OAuth JSON field")
+            try expect(OAuthDeviceFlowError.missingClientSecret.localizedDescription.contains("Web Application"),
+                       "Missing client_secret errors should mention the common web-client mismatch")
+        }
     }
 
     private static func verifyPollingSlowDownAndTokenSuccess() async throws {
@@ -484,6 +574,7 @@ struct VerifyOAuthDeviceFlow {
             tokenType: "Bearer",
             scope: OAuthServiceKind.googleCalendar.scopes,
             clientID: "google-client",
+            clientSecret: "google-client-secret",
             tenant: nil,
             service: .googleCalendar
         )
@@ -496,9 +587,11 @@ struct VerifyOAuthDeviceFlow {
         try expect(fields["grant_type"] == "refresh_token", "Google refresh should use refresh_token grant")
         try expect(fields["refresh_token"] == "old-google-refresh", "Google refresh should submit the stored refresh token")
         try expect(fields["client_id"] == "google-client", "Google refresh should submit the client ID")
+        try expect(fields["client_secret"] == "google-client-secret", "Google refresh should submit the stored desktop client_secret when present")
         try expect(fields["scope"] == nil, "Google refresh should not send an extra scope field")
         try expect(refreshed.accessToken == "new-google-access", "Google refresh should return the new access token")
         try expect(refreshed.refreshToken == "new-google-refresh", "Google refresh should prefer a rotated refresh token")
+        try expect(refreshed.clientSecret == "google-client-secret", "Google refresh should preserve the desktop client_secret for later refreshes")
         try expect(refreshed.scope == OAuthServiceKind.googleCalendar.scopes,
                    "Google refresh should fall back to calendar scopes when token response omits scope")
         try expect(refreshed.tenant == nil, "Google refresh should not invent a tenant")
