@@ -1252,12 +1252,10 @@ struct ProviderSourceEditorView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var oauthClientID = ""
-    @State private var oauthClientSecret = ""
     @State private var oauthTenant = "common"
     @State private var oauthAuthorization: OAuthDeviceAuthorization?
     @State private var oauthBrowserURL: URL?
     @State private var oauthMessage: String?
-    @State private var oauthImportMessage: String?
     @State private var isAuthorizing = false
     @State private var sourceMessage: String?
     @State private var isSaving = false
@@ -1311,6 +1309,10 @@ struct ProviderSourceEditorView: View {
     }
 
     private var effectiveOAuthClientID: String {
+        if sourceKind == .google {
+            return sourceKind.oauthService?.defaultClientID ?? ""
+        }
+
         let typedClientID = oauthClientID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !typedClientID.isEmpty {
             return typedClientID
@@ -1452,46 +1454,30 @@ struct ProviderSourceEditorView: View {
                     ProviderHintRow(text: oauthService.onboardingGuidanceText)
 
                     if oauthService == .googleCalendar {
-                        LocalCalendarEditorRow(label: "OAuth JSON") {
-                            HStack(spacing: 10) {
-                                Button {
-                                    importGoogleOAuthClientJSON()
-                                } label: {
-                                    Label("Import Desktop JSON", systemImage: "doc.badge.gearshape")
-                                }
-                                .buttonStyle(.bordered)
-                                .help("Import the downloaded Google Desktop OAuth JSON and fill client_id/client_secret locally.")
-
-                                if let oauthImportMessage {
-                                    Text(oauthImportMessage)
-                                        .font(.caption)
-                                        .foregroundStyle(Color.secondary)
-                                        .lineLimit(2)
-                                }
+                        LocalCalendarEditorRow(label: "Credentials") {
+                            HStack(spacing: 8) {
+                                Image(systemName: effectiveOAuthClientID.isEmpty ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
+                                    .foregroundStyle(effectiveOAuthClientID.isEmpty ? Color.orange : Color.green)
+                                Text(effectiveOAuthClientID.isEmpty ? "Missing from this build" : "Embedded in this build")
+                                    .font(.callout.weight(.semibold))
+                                Spacer()
                             }
                         }
+
+                        ProviderHintRow(text: effectiveOAuthClientID.isEmpty
+                            ? "Rebuild with GOOGLE_OAUTH_CLIENT_JSON pointing at the downloaded Google Desktop OAuth JSON."
+                            : "The Google desktop client_id and client_secret are compiled into this local build and are not editable here.")
                     }
 
-                    LocalCalendarEditorRow(label: "Client ID") {
-                        TextField(oauthService.clientIDPlaceholder, text: $oauthClientID)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .help(oauthService.onboardingGuidanceText)
-                    }
-
-                    if oauthService.usesClientSecret {
-                        LocalCalendarEditorRow(label: "Client Secret") {
-                            SecureField(oauthService.clientSecretPlaceholder, text: $oauthClientSecret)
+                    if oauthService != .googleCalendar {
+                        LocalCalendarEditorRow(label: "Client ID") {
+                            TextField(oauthService.clientIDPlaceholder, text: $oauthClientID)
                                 .textFieldStyle(.plain)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 8)
                                 .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                .help(oauthService.clientSecretGuidanceText)
+                                .help(oauthService.onboardingGuidanceText)
                         }
-
-                        ProviderHintRow(text: oauthService.clientSecretGuidanceText)
                     }
 
                     if let oauthClientIDValidationMessage {
@@ -1571,14 +1557,10 @@ struct ProviderSourceEditorView: View {
             oauthAuthorization = nil
             oauthBrowserURL = nil
             oauthMessage = nil
-            oauthImportMessage = nil
             sourceMessage = nil
             isAuthorizing = false
             isSaving = false
             applyDefaultOAuthClientID(oldService: oldKind.oauthService, newService: newKind.oauthService)
-            if newKind.oauthService?.usesClientSecret != true {
-                oauthClientSecret = ""
-            }
             if newKind == .calDAV {
                 applyCalDAVPreset(oldPreset: .generic, newPreset: calDAVPreset)
             }
@@ -1611,29 +1593,6 @@ struct ProviderSourceEditorView: View {
         }
     }
 
-    private func importGoogleOAuthClientJSON() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.message = "Choose the downloaded Google Desktop OAuth JSON."
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        do {
-            let configuration = try GoogleOAuthClientConfiguration.load(from: url)
-            oauthClientID = configuration.clientID
-            oauthClientSecret = configuration.clientSecret ?? ""
-            oauthImportMessage = configuration.clientSecret == nil
-                ? "Imported client_id. No client_secret was present in this Desktop JSON."
-                : "Imported Desktop OAuth client_id and client_secret."
-            oauthMessage = nil
-        } catch {
-            oauthImportMessage = error.localizedDescription
-        }
-    }
-
     private func saveCurrentSource() async {
         isSaving = true
         sourceMessage = "Adding source..."
@@ -1659,9 +1618,7 @@ struct ProviderSourceEditorView: View {
         let tenant = service == .microsoft365
             ? oauthTenant.trimmingCharacters(in: .whitespacesAndNewlines)
             : nil
-        let clientSecret = service.usesClientSecret
-            ? normalizedOptional(oauthClientSecret)
-            : nil
+        let clientSecret = service.defaultClientSecret
 
         isAuthorizing = true
         oauthAuthorization = nil
@@ -1716,10 +1673,6 @@ struct ProviderSourceEditorView: View {
         }
     }
 
-    private func normalizedOptional(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }
 
 struct ProviderSourceEditView: View {
@@ -1875,12 +1828,10 @@ struct ProviderReconnectView: View {
     let cancel: () -> Void
 
     @State private var oauthClientID: String
-    @State private var oauthClientSecret: String
     @State private var oauthTenant: String
     @State private var oauthAuthorization: OAuthDeviceAuthorization?
     @State private var oauthBrowserURL: URL?
     @State private var oauthMessage: String?
-    @State private var oauthImportMessage: String?
     @State private var isAuthorizing = false
 
     init(
@@ -1904,7 +1855,6 @@ struct ProviderReconnectView: View {
         }
         let storedClientID = existingCredential?.clientID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         _oauthClientID = State(initialValue: storedClientID.isEmpty ? fallbackService?.defaultClientID ?? "" : storedClientID)
-        _oauthClientSecret = State(initialValue: existingCredential?.clientSecret ?? "")
         _oauthTenant = State(initialValue: existingCredential?.tenant?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? existingCredential?.tenant ?? "common"
             : "common")
@@ -1935,6 +1885,10 @@ struct ProviderReconnectView: View {
     }
 
     private var effectiveOAuthClientID: String {
+        if service == .googleCalendar {
+            return service?.defaultClientID ?? ""
+        }
+
         let typedClientID = oauthClientID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !typedClientID.isEmpty {
             return typedClientID
@@ -1974,52 +1928,34 @@ struct ProviderReconnectView: View {
                 }
 
                 if service == .googleCalendar {
-                    LocalCalendarEditorRow(label: "OAuth JSON") {
-                        HStack(spacing: 10) {
-                            Button {
-                                importGoogleOAuthClientJSON()
-                            } label: {
-                                Label("Import Desktop JSON", systemImage: "doc.badge.gearshape")
-                            }
-                            .buttonStyle(.bordered)
-                            .help("Import the downloaded Google Desktop OAuth JSON and fill client_id/client_secret locally.")
-
-                            if let oauthImportMessage {
-                                Text(oauthImportMessage)
-                                    .font(.caption)
-                                    .foregroundStyle(Color.secondary)
-                                    .lineLimit(2)
-                            }
+                    LocalCalendarEditorRow(label: "Credentials") {
+                        HStack(spacing: 8) {
+                            Image(systemName: effectiveOAuthClientID.isEmpty ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
+                                .foregroundStyle(effectiveOAuthClientID.isEmpty ? Color.orange : Color.green)
+                            Text(effectiveOAuthClientID.isEmpty ? "Missing from this build" : "Embedded in this build")
+                                .font(.callout.weight(.semibold))
+                            Spacer()
                         }
                     }
+
+                    ProviderHintRow(text: effectiveOAuthClientID.isEmpty
+                        ? "Rebuild with GOOGLE_OAUTH_CLIENT_JSON pointing at the downloaded Google Desktop OAuth JSON."
+                        : "The Google desktop client_id and client_secret are compiled into this local build and are not editable here.")
                 }
 
-                LocalCalendarEditorRow(label: "Client ID") {
-                    TextField(service?.clientIDPlaceholder ?? "OAuth client ID", text: $oauthClientID)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .help(service?.onboardingGuidanceText ?? "Enter the OAuth client ID for this source.")
-                }
-
-                if let oauthClientIDValidationMessage {
-                    ProviderHintRow(text: oauthClientIDValidationMessage)
-                }
-
-                if service?.usesClientSecret == true {
-                    LocalCalendarEditorRow(label: "Client Secret") {
-                        SecureField(service?.clientSecretPlaceholder ?? "Optional client_secret", text: $oauthClientSecret)
+                if service != .googleCalendar {
+                    LocalCalendarEditorRow(label: "Client ID") {
+                        TextField(service?.clientIDPlaceholder ?? "OAuth client ID", text: $oauthClientID)
                             .textFieldStyle(.plain)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
                             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .help(service?.clientSecretGuidanceText ?? "Enter a client_secret only if the OAuth provider requires it.")
+                            .help(service?.onboardingGuidanceText ?? "Enter the OAuth client ID for this source.")
                     }
+                }
 
-                    if let clientSecretGuidanceText = service?.clientSecretGuidanceText, !clientSecretGuidanceText.isEmpty {
-                        ProviderHintRow(text: clientSecretGuidanceText)
-                    }
+                if let oauthClientIDValidationMessage {
+                    ProviderHintRow(text: oauthClientIDValidationMessage)
                 }
 
                 if service?.usesTenant == true {
@@ -2095,9 +2031,7 @@ struct ProviderReconnectView: View {
         oauthAuthorization = nil
         oauthBrowserURL = nil
         oauthMessage = "Requesting sign-in code..."
-        let clientSecret = service.usesClientSecret
-            ? normalizedOptional(oauthClientSecret)
-            : nil
+        let clientSecret = service.defaultClientSecret
 
         do {
             let client = OAuthDeviceFlowClient()
@@ -2140,33 +2074,6 @@ struct ProviderReconnectView: View {
         }
     }
 
-    private func importGoogleOAuthClientJSON() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.message = "Choose the downloaded Google Desktop OAuth JSON."
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        do {
-            let configuration = try GoogleOAuthClientConfiguration.load(from: url)
-            oauthClientID = configuration.clientID
-            oauthClientSecret = configuration.clientSecret ?? ""
-            oauthImportMessage = configuration.clientSecret == nil
-                ? "Imported client_id. No client_secret was present in this Desktop JSON."
-                : "Imported Desktop OAuth client_id and client_secret."
-            oauthMessage = nil
-        } catch {
-            oauthImportMessage = error.localizedDescription
-        }
-    }
-
-    private func normalizedOptional(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }
 
 struct LocalCalendarAccountSection: View {

@@ -59,7 +59,16 @@ enum OAuthServiceKind: String, Codable, Hashable {
     var defaultClientID: String? {
         switch self {
         case .googleCalendar:
-            return "728926875401-u5ou0oi0d0bklrd3qbl328nv58j8jj4t.apps.googleusercontent.com"
+            return GeneratedOAuthClientConfiguration.googleClientID
+        case .microsoft365:
+            return nil
+        }
+    }
+
+    var defaultClientSecret: String? {
+        switch self {
+        case .googleCalendar:
+            return GeneratedOAuthClientConfiguration.googleClientSecret
         case .microsoft365:
             return nil
         }
@@ -86,7 +95,7 @@ enum OAuthServiceKind: String, Codable, Hashable {
     var clientSecretPlaceholder: String {
         switch self {
         case .googleCalendar:
-            return "Optional client_secret from Desktop OAuth JSON"
+            return "Embedded Google desktop client_secret"
         case .microsoft365:
             return ""
         }
@@ -95,7 +104,7 @@ enum OAuthServiceKind: String, Codable, Hashable {
     var clientSecretGuidanceText: String {
         switch self {
         case .googleCalendar:
-            return "Optional: Google Desktop OAuth may include a client_secret in the downloaded JSON. It is not a user password or a confidential desktop secret; enter it only if Google rejects token exchange with client_secret is missing."
+            return "Google Desktop OAuth credentials are embedded at build time. Rebuild with GOOGLE_OAUTH_CLIENT_JSON or GOOGLE_OAUTH_CLIENT_SECRET if Google rotates the desktop client configuration."
         case .microsoft365:
             return ""
         }
@@ -113,7 +122,7 @@ enum OAuthServiceKind: String, Codable, Hashable {
     var onboardingGuidanceText: String {
         switch self {
         case .googleCalendar:
-            return "Use a Google OAuth desktop client ID ending in .apps.googleusercontent.com. Working Calendar opens browser sign-in with a local loopback redirect, requests calendar read/write scope, and stores the refresh token in Keychain for background sync."
+            return "Working Calendar uses the Google OAuth desktop credentials embedded in this build, opens browser sign-in with a local loopback redirect, requests calendar read/write scope, and stores the refresh token in Keychain for background sync."
         case .microsoft365:
             return "Use a Microsoft public-client app ID with device-code flow enabled. Working Calendar requests calendar read/write plus profile scopes and stores the refresh token in Keychain."
         }
@@ -238,79 +247,6 @@ struct OAuthCredential: Codable, Hashable {
     }
 }
 
-struct GoogleOAuthClientConfiguration: Hashable {
-    let clientID: String
-    let clientSecret: String?
-    let redirectURIs: [String]
-
-    static func load(from url: URL) throws -> GoogleOAuthClientConfiguration {
-        let data = try Data(contentsOf: url)
-        return try decode(data)
-    }
-
-    static func decode(_ data: Data) throws -> GoogleOAuthClientConfiguration {
-        let decoded = try JSONDecoder().decode(GoogleOAuthClientConfigurationFile.self, from: data)
-        guard let installed = decoded.installed else {
-            throw GoogleOAuthClientConfigurationError.missingInstalledClient
-        }
-
-        let clientID = installed.clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clientID.isEmpty else {
-            throw GoogleOAuthClientConfigurationError.missingClientID
-        }
-        if let validationMessage = OAuthServiceKind.googleCalendar.clientIDValidationMessage(for: clientID) {
-            throw GoogleOAuthClientConfigurationError.invalidClientID(validationMessage)
-        }
-
-        let clientSecret = installed.clientSecret?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nilIfBlank
-
-        return GoogleOAuthClientConfiguration(
-            clientID: clientID,
-            clientSecret: clientSecret,
-            redirectURIs: installed.redirectURIs ?? []
-        )
-    }
-}
-
-enum GoogleOAuthClientConfigurationError: LocalizedError {
-    case missingInstalledClient
-    case missingClientID
-    case invalidClientID(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .missingInstalledClient:
-            return "Choose the downloaded JSON for a Google Desktop OAuth client. The file should contain an installed client section, not a web client section."
-        case .missingClientID:
-            return "The Google OAuth JSON does not contain an installed.client_id."
-        case .invalidClientID(let message):
-            return message
-        }
-    }
-}
-
-private struct GoogleOAuthClientConfigurationFile: Decodable {
-    let installed: GoogleOAuthClientConfigurationPayload?
-
-    private enum CodingKeys: String, CodingKey {
-        case installed
-    }
-}
-
-private struct GoogleOAuthClientConfigurationPayload: Decodable {
-    let clientID: String
-    let clientSecret: String?
-    let redirectURIs: [String]?
-
-    private enum CodingKeys: String, CodingKey {
-        case clientID = "client_id"
-        case clientSecret = "client_secret"
-        case redirectURIs = "redirect_uris"
-    }
-}
-
 enum OAuthDeviceFlowError: LocalizedError {
     case missingClientID
     case invalidClientID(OAuthServiceKind, String)
@@ -358,7 +294,7 @@ enum OAuthDeviceFlowError: LocalizedError {
         case .missingAuthorizationCode:
             return "The OAuth provider did not return an authorization code."
         case .missingClientSecret:
-            return "Google requires a client_secret for this OAuth client. If this is a Desktop OAuth client, download its JSON from Google Cloud and enter installed.client_secret. If there is no installed.client_secret, create a Desktop app OAuth client instead of a Web Application client."
+            return "Google requires a client_secret for this OAuth client. Rebuild Working Calendar with a Google Desktop OAuth JSON so installed.client_secret is embedded in the binary."
         case .stateMismatch:
             return "The OAuth response did not match this sign-in attempt. Start connection again."
         case .randomGenerationFailed:

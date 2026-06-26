@@ -4,3 +4,4 @@ build/
 DerivedData/
 client_secret*.json
 *client_secret*.json
+Sources/WorkingCalendar/GeneratedOAuthClientConfiguration.swift

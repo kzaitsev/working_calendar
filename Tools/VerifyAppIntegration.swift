@@ -9,6 +9,7 @@ struct VerifyAppIntegration {
         try verifyFantasticalStyleWorkspaceShell()
         try verifyExternalOpenDeduper()
         try verifyDockIconUsesInlineUpcomingCounter()
+        try verifyGoogleOAuthCredentialsAreBuildEmbedded()
         print("App integration invariant passed.")
     }
 
@@ -180,6 +181,24 @@ struct VerifyAppIntegration {
                    "Static app icon should visually match the runtime dock icon counter style")
         try expect(!iconGeneratorSource.contains("alertCenter"),
                    "Static app icon should not regress to the old red alert badge artwork")
+    }
+
+    private static func verifyGoogleOAuthCredentialsAreBuildEmbedded() throws {
+        let calendarsSource = try readSource("Sources/WorkingCalendar/CalendarsView.swift")
+        let oauthSource = try readSource("Sources/WorkingCalendar/OAuthDeviceFlowClient.swift")
+
+        try expect(calendarsSource.contains("Embedded in this build"),
+                   "Google source setup should show build-embedded credential status")
+        try expect(!calendarsSource.contains("Import Desktop JSON"),
+                   "Google source setup should not expose a runtime OAuth JSON import button")
+        try expect(!calendarsSource.contains("label: \"OAuth JSON\""),
+                   "Google source setup should not expose a runtime OAuth JSON row")
+        try expect(!calendarsSource.contains("Client Secret"),
+                   "Google source setup should not expose a client_secret field")
+        try expect(oauthSource.contains("GeneratedOAuthClientConfiguration.googleClientID"),
+                   "Google OAuth should read client_id from generated build-time configuration")
+        try expect(oauthSource.contains("GeneratedOAuthClientConfiguration.googleClientSecret"),
+                   "Google OAuth should read client_secret from generated build-time configuration")
     }
 
     private static func readSource(_ path: String) throws -> String {

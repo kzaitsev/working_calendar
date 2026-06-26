@@ -4,7 +4,6 @@ import Foundation
 struct VerifyOAuthDeviceFlow {
     static func main() async throws {
         try verifyOAuthOnboardingMetadata()
-        try verifyGoogleOAuthClientConfigurationImport()
         try await verifyOAuthClientIDValidation()
         try await verifyDeviceAuthorizationRequest()
         try await verifyGoogleDoesNotUseDeviceAuthorization()
@@ -24,28 +23,34 @@ struct VerifyOAuthDeviceFlow {
     private static func verifyOAuthOnboardingMetadata() throws {
         try expect(OAuthServiceKind.googleCalendar.clientIDLabel.localizedCaseInsensitiveContains("desktop client ID"),
                    "Google onboarding should ask for a desktop OAuth client ID")
-        try expect(OAuthServiceKind.googleCalendar.defaultClientID == "728926875401-u5ou0oi0d0bklrd3qbl328nv58j8jj4t.apps.googleusercontent.com",
-                   "Google onboarding should ship the configured desktop OAuth client ID")
-        try expect(OAuthServiceKind.googleCalendar.clientIDPlaceholder == OAuthServiceKind.googleCalendar.defaultClientID ?? "",
-                   "Google onboarding should show the shipped desktop client ID as the placeholder")
-        try expect(OAuthServiceKind.googleCalendar.clientIDPlaceholder.hasSuffix(".apps.googleusercontent.com"),
-                   "Google onboarding should show the expected desktop client ID shape")
+        try expect(OAuthServiceKind.googleCalendar.defaultClientID == GeneratedOAuthClientConfiguration.googleClientID,
+                   "Google onboarding should read the desktop OAuth client ID from generated build configuration")
+        try expect(OAuthServiceKind.googleCalendar.defaultClientSecret == GeneratedOAuthClientConfiguration.googleClientSecret,
+                   "Google onboarding should read the desktop OAuth client_secret from generated build configuration")
+        if let embeddedGoogleClientID = OAuthServiceKind.googleCalendar.defaultClientID {
+            try expect(embeddedGoogleClientID.hasSuffix(".apps.googleusercontent.com"),
+                       "Embedded Google desktop OAuth client ID should use the expected Google suffix")
+            try expect(OAuthServiceKind.googleCalendar.clientIDValidationMessage(for: embeddedGoogleClientID) == nil,
+                       "Embedded Google desktop OAuth client ID should pass local validation")
+            try expect(OAuthServiceKind.googleCalendar.clientIDPlaceholder == embeddedGoogleClientID,
+                       "Google onboarding should use the embedded desktop client ID as the placeholder when present")
+        }
         try expect(OAuthServiceKind.googleCalendar.onboardingGuidanceText.contains("Keychain"),
                    "Google onboarding should explain refresh-token storage")
         try expect(OAuthServiceKind.googleCalendar.onboardingGuidanceText.contains("calendar read/write"),
                    "Google onboarding should explain calendar write scope")
-        try expect(OAuthServiceKind.googleCalendar.onboardingGuidanceText.contains(".apps.googleusercontent.com"),
-                   "Google onboarding should explain client ID shape")
+        try expect(OAuthServiceKind.googleCalendar.onboardingGuidanceText.localizedCaseInsensitiveContains("embedded"),
+                   "Google onboarding should explain that desktop credentials are build-embedded")
         try expect(OAuthServiceKind.googleCalendar.onboardingGuidanceText.localizedCaseInsensitiveContains("loopback"),
                    "Google onboarding should explain loopback desktop sign-in")
         try expect(OAuthServiceKind.googleCalendar.onboardingGuidanceText.localizedCaseInsensitiveContains("browser"),
                    "Google onboarding should explain browser sign-in")
         try expect(OAuthServiceKind.googleCalendar.usesClientSecret,
-                   "Google onboarding should expose the optional desktop client_secret field")
-        try expect(OAuthServiceKind.googleCalendar.clientSecretGuidanceText.localizedCaseInsensitiveContains("optional"),
-                   "Google client_secret guidance should make the field optional")
-        try expect(OAuthServiceKind.googleCalendar.clientSecretGuidanceText.localizedCaseInsensitiveContains("not a user password"),
-                   "Google client_secret guidance should distinguish it from user credentials")
+                   "Google OAuth should still carry the desktop client_secret when the provider requires it")
+        try expect(OAuthServiceKind.googleCalendar.clientSecretGuidanceText.localizedCaseInsensitiveContains("embedded at build time"),
+                   "Google client_secret guidance should point to build-time embedding")
+        try expect(OAuthServiceKind.googleCalendar.clientSecretGuidanceText.contains("GOOGLE_OAUTH_CLIENT_JSON"),
+                   "Google client_secret guidance should document the build-time JSON input")
         try expect(!OAuthServiceKind.googleCalendar.usesTenant,
                    "Google onboarding should not ask for a tenant")
 
@@ -63,41 +68,6 @@ struct VerifyOAuthDeviceFlow {
                    "Microsoft onboarding should explain device-code flow requirements")
         try expect(OAuthServiceKind.microsoft365.onboardingGuidanceText.contains("Keychain"),
                    "Microsoft onboarding should explain refresh-token storage")
-    }
-
-    private static func verifyGoogleOAuthClientConfigurationImport() throws {
-        let installedJSON = """
-        {
-          "installed": {
-            "client_id": " 1234567890-abc.apps.googleusercontent.com ",
-            "client_secret": " desktop-client-secret ",
-            "redirect_uris": ["http://localhost"]
-          }
-        }
-        """
-        let configuration = try GoogleOAuthClientConfiguration.decode(Data(installedJSON.utf8))
-        try expect(configuration.clientID == "1234567890-abc.apps.googleusercontent.com",
-                   "Google Desktop OAuth JSON import should trim installed.client_id")
-        try expect(configuration.clientSecret == "desktop-client-secret",
-                   "Google Desktop OAuth JSON import should trim installed.client_secret")
-        try expect(configuration.redirectURIs == ["http://localhost"],
-                   "Google Desktop OAuth JSON import should preserve redirect URI metadata")
-
-        let webJSON = """
-        {
-          "web": {
-            "client_id": "1234567890-web.apps.googleusercontent.com",
-            "client_secret": "web-client-secret"
-          }
-        }
-        """
-        do {
-            _ = try GoogleOAuthClientConfiguration.decode(Data(webJSON.utf8))
-            throw OAuthDeviceFlowInvariantError("Google web OAuth JSON should not be accepted for desktop loopback sign-in")
-        } catch GoogleOAuthClientConfigurationError.missingInstalledClient {
-            try expect(GoogleOAuthClientConfigurationError.missingInstalledClient.localizedDescription.contains("Desktop OAuth"),
-                       "Google OAuth JSON import should explain that Desktop JSON is required")
-        }
     }
 
     private static func verifyOAuthClientIDValidation() async throws {
@@ -380,8 +350,8 @@ struct VerifyOAuthDeviceFlow {
         } catch OAuthDeviceFlowError.missingClientSecret {
             try expect(OAuthDeviceFlowError.missingClientSecret.localizedDescription.contains("installed.client_secret"),
                        "Missing client_secret errors should point to the Desktop OAuth JSON field")
-            try expect(OAuthDeviceFlowError.missingClientSecret.localizedDescription.contains("Web Application"),
-                       "Missing client_secret errors should mention the common web-client mismatch")
+            try expect(OAuthDeviceFlowError.missingClientSecret.localizedDescription.localizedCaseInsensitiveContains("embedded in the binary"),
+                       "Missing client_secret errors should point to build-time embedding")
         }
     }
 
